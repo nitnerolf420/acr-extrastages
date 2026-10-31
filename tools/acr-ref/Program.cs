@@ -44,6 +44,7 @@ internal static class Program
                 "ground-at" => HeightSurvey.GroundAt(opts),
                 "procmesh-probe" => ProcMesh.Probe(opts),
                 "export-info" => ExportInfo(opts),
+                "export-hex" => ExportHex(opts),
                 "scenery-survey" => Scenery.Survey(opts),
                 "scenery-actor-slots" => Scenery.ActorSlots(opts),
                 "mesh-uv" => MeshUv.Run(opts),
@@ -102,6 +103,10 @@ internal static class Program
         binary analysis:
           acr-ref xref <string>... [--callers-of <va,...>] [--exe acr.exe] [--fields 0x349,0x350] [--out file.txt]
                               disassembles functions that reference the strings, marking struct-offset accesses
+
+        legacy package inspection (output of `retoc to-legacy`):
+          acr-ref export-info <legacy .uasset/.umap> --filter <regex on name|class>   exports with their dependencies
+          acr-ref export-hex  <legacy .uasset/.umap> --index <n> [--limit bytes]       one export's header slots and bytes (hex)
 
         common options:
           --game  <install dir>   (default: Steam ACR install)
@@ -218,6 +223,42 @@ internal static class Program
             if (!re.IsMatch(pkg.ExportName(e)) && !re.IsMatch(pkg.ExportClass(e))) continue;
             Console.WriteLine($"#{e} {pkg.ExportName(e)} ({pkg.ExportClass(e)}) outer {Ref(pkg.ExportOuter(e))} flags 0x{pkg.ExportFlags(e):X} {pkg.GetExportData(e).Length} bytes");
             foreach (var (kind, _, index) in pkg.ExportDeps(e)) Console.WriteLine($"    {kind} {Ref(index)}");
+        }
+        return 0;
+    }
+
+    /// export-hex <legacy .uasset/.umap> --index <n as printed by export-info> [--limit bytes]: one export's header slots,
+    /// dependencies and bytes (hex), plus its last 256 bytes when the limit cuts it off.
+    static int ExportHex(Options o)
+    {
+        if (o.Positional.Count != 1 || !o.Named.TryGetValue("index", out var indexText))
+            return Fail("export-hex needs a legacy .uasset/.umap and --index <export number from export-info> [--limit bytes]");
+        var pkg = new LegacyPackage(o.Positional[0]);
+        int e = int.Parse(indexText);
+        if (e < 0 || e >= pkg.ExportCount) return Fail($"--index {e} is outside 0..{pkg.ExportCount - 1}");
+        var d = pkg.GetExportData(e);
+        string Ref(int i) => i > 0 ? $"{pkg.ExportName(i - 1)}#{i - 1}" : i < 0 ? $"import:{pkg.ImportName(-i - 1)}" : "null";
+        Console.WriteLine($"#{e} {pkg.ExportName(e)} ({pkg.ExportClass(e)}) outer {Ref(pkg.ExportOuter(e))} flags 0x{pkg.ExportFlags(e):X} {d.Length} bytes");
+        foreach (var (kind, _, index) in pkg.ExportDeps(e)) Console.WriteLine($"    {kind} {Ref(index)}");
+        try
+        {
+            int p = 0;
+            var slots = Unv.ReadHeader(d, ref p);
+            Console.WriteLine($"unversioned header: {slots.Count} slots, non-zero: {string.Join(",", slots.Where(x => !x.Zero).Select(x => x.Index))}; values start at byte {p}");
+        }
+        catch (Exception ex) { Console.WriteLine($"unversioned header: not readable ({ex.Message})"); }
+        int limit = o.Limit ?? 8192;
+        void Hex(int from, int count)
+        {
+            for (int i = 0; i < count; i += 16)
+                Console.WriteLine($"  {from + i:X6}: {string.Join(" ", d.Skip(from + i).Take(Math.Min(16, count - i)).Select(b => b.ToString("X2")))}");
+        }
+        Hex(0, Math.Min(d.Length, limit));
+        if (d.Length > limit)
+        {
+            Console.WriteLine($"  ... {d.Length - limit} bytes not shown; last 256:");
+            int from = Math.Max(limit, d.Length - 256);
+            Hex(from, d.Length - from);
         }
         return 0;
     }
