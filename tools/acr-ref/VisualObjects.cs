@@ -42,6 +42,7 @@ internal static class VisualObjects
     {
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
+        int crownTiers = (int)NumOr(cfg, "objects", "crown_tiers", 1), crownSides = (int)NumOr(cfg, "objects", "crown_sides", 4);
         var sec = Classes.ToDictionary(c => c, _ => new ProcMesh.Section());
         var counts = Classes.ToDictionary(c => c, _ => 0);
 
@@ -147,7 +148,7 @@ internal static class VisualObjects
                 string crown = "no crown";
                 if (crowns && mesh is not null)
                 {
-                    if (Crown(mesh, m, Ue, objs.Probe.Road, cfg) is { } box) { AddOctahedron(sec["soft"], box); counts["soft"]++; crownsDrawn++; crown = "small crown"; }
+                    if (Crown(mesh, m, Ue, objs.Probe.Road, cfg) is { } box) { AddTieredCrown(sec["soft"], box, crownTiers, crownSides); counts["soft"]++; crownsDrawn++; crown = $"{crownTiers}-tier crown"; }
                     else crownsDropped++;
                 }
                 perTemplate.TryAdd(tname, $"tree: trunk shapes, {crown}");
@@ -525,6 +526,40 @@ internal static class VisualObjects
         for (int t = 0; t + 2 < mesh.Idx.Length; t += 3)
             best = Math.Max(best, probe.TriangleDepth(w[mesh.Idx[t]], w[mesh.Idx[t + 1]], w[mesh.Idx[t + 2]], 50, probe.HMin, overhang));
         return best;
+    }
+
+    static double NumOr(Toml cfg, string section, string key, double fallback) =>
+        cfg[section].TryGetValue(key, out var v) && v is double d ? d : fallback;
+
+    /// Spruce / pine style crown: `tiers` stacked cones with `sides` sides each, inside the same box the octahedron used
+    /// (so the road-corridor checks in Visuals.cs still hold: nothing is wider than the box). Lowest tier is widest,
+    /// the top tier ends at the box top. tiers <= 1 falls back to the old octahedron.
+    static void AddTieredCrown(ProcMesh.Section s, (V3 mn, V3 mx) box, int tiers, int sides)
+    {
+        if (tiers <= 1) { AddOctahedron(s, box); return; }
+        sides = Math.Max(3, sides);
+        var (mn, mx) = box;
+        double cx = (mn.X + mx.X) / 2, cy = (mn.Y + mx.Y) / 2, R = (mx.X - mn.X) / 2, H = mx.Z - mn.Z;
+        for (int k = 0; k < tiers; k++)
+        {
+            double t0 = 0.55 * k / tiers * 1.0;                  // tier bottom, fraction of the box height
+            double t1 = k == tiers - 1 ? 1.0 : t0 + 0.55;        // tier top (tiers overlap so there are no gaps)
+            double r = R * (1.0 - 0.55 * k / tiers);             // radius of the tier's base ring
+            double zb = mn.Z + H * t0, zt = mn.Z + H * Math.Min(1.0, t1);
+            var apex = new V3(cx, cy, zt); var baseC = new V3(cx, cy, zb);
+            var inside = new V3(cx, cy, (zb + zt) / 2);
+            var ring = new V3[sides];
+            for (int i = 0; i < sides; i++)
+            {
+                double a = 2 * Math.PI * i / sides + (k % 2) * Math.PI / sides;   // alternate tiers are rotated half a side
+                ring[i] = new V3(cx + r * Math.Cos(a), cy + r * Math.Sin(a), zb);
+            }
+            for (int i = 0; i < sides; i++)
+            {
+                Tri(s, ring[i], ring[(i + 1) % sides], apex, inside);   // side
+                Tri(s, ring[i], ring[(i + 1) % sides], baseC, inside);  // underside
+            }
+        }
     }
 
     static void AddOctahedron(ProcMesh.Section s, (V3 mn, V3 mx) box)
