@@ -1,7 +1,7 @@
-name: Build dr2-extract
+name: Build tools (dr2-extract, acr-ref, launcher)
 
-# Manual run (Actions tab -> "Build dr2-extract" -> Run workflow): builds only tools/dr2-extract as the same
-# self-contained single-file win-x64 exe the release contains, and uploads it as a downloadable artifact.
+# Manual run (Actions tab -> "Build tools" -> Run workflow): builds tools/dr2-extract, tools/acr-ref and the launcher
+# as the same self-contained single-file win-x64 exes the release contains, and uploads each as a downloadable artifact.
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ env:
 
 jobs:
   build:
-    name: dr2-extract.exe
+    name: dr2-extract.exe + acr-ref.exe + AcrExtraStages.exe
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -31,12 +31,44 @@ jobs:
           dotnet publish tools/dr2-extract/Dr2Extract.csproj -c Release -r win-x64 --self-contained true `
             -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:EnableCompressionInSingleFile=true -p:DebugType=embedded -p:NuGetAudit=false `
-            --nologo -v:minimal -o out
-          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
-          if (-not (Test-Path out/dr2-extract.exe)) { throw 'no dr2-extract.exe produced' }
+            --nologo -v:minimal -o out/dr2-extract
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish dr2-extract failed' }
+          if (-not (Test-Path out/dr2-extract/dr2-extract.exe)) { throw 'no dr2-extract.exe produced' }
+
+      - name: Publish acr-ref
+        shell: pwsh
+        run: |
+          dotnet publish tools/acr-ref/AcrRef.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true -p:DebugType=embedded `
+            --nologo -v:minimal -o out/acr-ref
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish acr-ref failed' }
+          if (-not (Test-Path out/acr-ref/acr-ref.exe)) { throw 'no acr-ref.exe produced' }
+
+      - name: Publish launcher
+        shell: pwsh
+        run: |
+          dotnet publish tools/launcher/AcrExtraStages.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true -p:DebugType=embedded `
+            --nologo -v:minimal -o out/launcher
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish launcher failed' }
+          if (-not (Test-Path out/launcher/AcrExtraStages.exe)) { throw 'no AcrExtraStages.exe produced' }
 
       - uses: actions/upload-artifact@v4
         with:
           name: dr2-extract
-          path: out/dr2-extract.exe
+          path: out/dr2-extract/dr2-extract.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: acr-ref
+          path: out/acr-ref/acr-ref.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher
+          path: out/launcher/AcrExtraStages.exe
           if-no-files-found: error
