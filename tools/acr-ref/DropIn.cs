@@ -209,6 +209,15 @@ internal sealed class Dr2Materials
     /// and stages without one (terrain_road / terrain_wsm shaders) take the diffuse most used by their terrain materials.
     public string TerrainTexture => _terrainTex ??= ResolveGround("terrain");
     public string RoadTexture => _roadTex ??= ResolveGround("road");
+    /// The road texture is a tall DR2 strip (pixels 1:2): see RoadUv squareTiles.
+    public bool RoadIsStrip
+    {
+        get
+        {
+            try { var d = new Dds(Path.Combine(_texDir, RoadTexture + ".dds")); return d.Height == 2 * d.Width; }
+            catch (Exception e) when (e is NotSupportedException or IOException) { return false; }
+        }
+    }
 
     string ResolveGround(string kind)
     {

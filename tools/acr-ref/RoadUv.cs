@@ -13,7 +13,9 @@ namespace AcrRef;
 /// the centreline segments near its first triangle, so the two legs of a hairpin do not mix.
 internal static class RoadUv
 {
-    public static JsonObject Apply(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section road)
+    /// squareTiles: the road texture is a tall DR2 strip (pixels 1:2, e.g. fin_ral_fea_01_d) that was authored to cover a square
+    /// patch of road: UV1 V then advances one unit per local road width (instead of road_uv1_along_m), so stones are round.
+    public static JsonObject Apply(StageBuild.Ir ir, StageBuild.Placement pl, Toml cfg, ProcMesh.Section road, bool squareTiles = false)
     {
         double a0 = cfg.Num("textured", "road_uv0_across_m") * 100, l0 = cfg.Num("textured", "road_uv0_along_m") * 100;
         double l1 = cfg.Num("textured", "road_uv1_along_m") * 100;
@@ -25,10 +27,14 @@ internal static class RoadUv
         var gates = ir.Gates.Select(g => { var l = pl.ToUe(g.left); var r = pl.ToUe(g.right);
             return (mid: new Vector2((float)(l.X + r.X) / 2, (float)(l.Y + r.Y) / 2), w: Math.Sqrt(Math.Pow(l.X - r.X, 2) + Math.Pow(l.Y - r.Y, 2))); }).ToArray();
         var width = cl.Select(q => gates.MinBy(g => (g.mid - q).LengthSquared()).w).ToArray();
+        // square tiles: tile coordinate along the centreline = integral of ds / width
+        var vc = new double[cl.Length];
+        for (int k = 1; k < cl.Length; k++) vc[k] = vc[k - 1] + (s[k] - s[k - 1]) / Math.Max(1.0, (width[k - 1] + width[k]) / 2);
+        double lPlanar = squareTiles ? Math.Max(100.0, width.Average()) : l1;
 
-        (double along, double across, double w, double dist) Project(Vector2 v, int lo, int hi)
+        (double along, double across, double w, double dist, double tile) Project(Vector2 v, int lo, int hi)
         {
-            var best = (along: 0.0, across: 0.0, w: 0.0, dist: double.MaxValue);
+            var best = (along: 0.0, across: 0.0, w: 0.0, dist: double.MaxValue, tile: 0.0);
             for (int k = Math.Max(0, lo); k < Math.Min(cl.Length - 1, hi); k++)
             {
                 var seg = cl[k + 1] - cl[k]; float len = seg.Length();
@@ -38,7 +44,10 @@ internal static class RoadUv
                 var foot = cl[k] + t * (float)f;
                 double dist = (v - foot).Length();
                 if (dist < best.dist)
-                    best = (s[k] + f, t.X * rel.Y - t.Y * rel.X, width[k] + (width[k + 1] - width[k]) * f / len, dist);
+                {
+                    double wi = width[k] + (width[k + 1] - width[k]) * f / len;
+                    best = (s[k] + f, t.X * rel.Y - t.Y * rel.X, wi, dist, vc[k] + f / Math.Max(1.0, wi));
+                }
             }
             return best;
         }
@@ -49,6 +58,7 @@ internal static class RoadUv
         road.Uv1.Clear(); road.Uv2.Clear(); road.Uv3.Clear();
         for (int i = 0; i < nv; i++) { road.Uv1.Add(Vector2.Zero); road.Uv2.Add(Vector2.Zero); road.Uv3.Add(Vector2.Zero); }
         double far = 0;
+        int clampedU = 0, mainVerts = 0, clampedFirst = 0, mainFirst = 0;
         for (int t = 0; t + 2 < road.Idx.Count; t += 3)
         {
             var g = Enumerable.Range(0, 3).Select(k => road.Pos[(int)road.Idx[t + k]]).Aggregate(Vector3.Zero, (a, b) => a + b) / 3;
@@ -64,11 +74,17 @@ internal static class RoadUv
                 int v = (int)road.Idx[t + k];
                 if (done[v]) continue;
                 done[v] = true;
-                var (along, across, w, dist) = Project(new Vector2(road.Pos[v].X, road.Pos[v].Y), j - 6, j + 7);
+                var (along, across, w, dist, tile) = Project(new Vector2(road.Pos[v].X, road.Pos[v].Y), j - 6, j + 7);
                 far = Math.Max(far, dist);
                 off[v] = dist;
+                if (dist <= 1500)
+                {
+                    bool first = along < s[^1] / 2;
+                    mainVerts++; if (first) mainFirst++;
+                    if (Math.Abs(across) > w / 2) { clampedU++; if (first) clampedFirst++; }
+                }
                 road.Uv[v] = new Vector2((float)(across / a0), (float)(along / l0));
-                road.Uv1[v] = new Vector2((float)Math.Clamp(0.5 + across / w, 0, 1), (float)(along / l1));
+                road.Uv1[v] = new Vector2((float)Math.Clamp(0.5 + across / w, 0, 1), squareTiles ? (float)tile : (float)(along / l1));
                 road.Uv2[v] = new Vector2((float)(0.5 - across / ta), (float)(along / tl));
                 road.Uv3[v] = new Vector2((float)(0.5 + across / ta), (float)(along / tl));
             }
@@ -89,12 +105,15 @@ internal static class RoadUv
                 road.Idx[t + k] = (uint)road.Pos.Count;
                 road.Pos.Add(q); road.Nrm.Add(road.Nrm[v]); if (tan) road.Tan.Add(road.Tan[v]);
                 road.Uv.Add(new Vector2((float)(q.X / a0), (float)(q.Y / l0)));
-                road.Uv1.Add(new Vector2(0.5f, (float)(q.Y / l1)));
+                road.Uv1.Add(new Vector2(0.5f, (float)(q.Y / lPlanar)));
                 road.Uv2.Add(new Vector2(0.5f, (float)(q.Y / tl)));
                 road.Uv3.Add(new Vector2(0.5f, (float)(q.Y / tl)));
             }
         }
         road.Color = Bgra(cfg, "road_color");
+        Console.WriteLine($"visuals: road strip U (UV1): {(squareTiles ? "square tiles, one V unit per road width" : $"{l1 / 100:0.#} m per V unit")}; gate width {width.Min() / 100:0.#}..{width.Max() / 100:0.#} m (mean {width.Average() / 100:0.#}); " +
+                          $"road vertices beyond the gate width (U clamped to the strip edge): {(mainVerts == 0 ? 0 : 100.0 * clampedU / mainVerts):0.#} % of {mainVerts} within 15 m of the centreline " +
+                          $"(first half {(mainFirst == 0 ? 0 : 100.0 * clampedFirst / mainFirst):0.#} %, second half {(mainVerts - mainFirst == 0 ? 0 : 100.0 * (clampedU - clampedFirst) / (mainVerts - mainFirst)):0.#} %)");
         var (inside, mu, mv) = Stretch(road, a0 / 100, l0 / 100);
         var r = new JsonObject
         {

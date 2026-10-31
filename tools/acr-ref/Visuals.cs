@@ -193,7 +193,7 @@ internal static class Visuals
         if (opt.Textured)
         {
             ground = "textured";
-            r["textured"] = RoadUv.Apply(ir, pl, cfg, road);
+            r["textured"] = RoadUv.Apply(ir, pl, cfg, road, opt.Dr2On("road") && dr2 is not null && dr2.RoadIsStrip);
             float k = (float)(4 / cfg.Num("textured", "terrain_uv_m"));
             for (int i = 0; i < terrain.Uv.Count; i++) terrain.Uv[i] *= k;
         }
