@@ -116,7 +116,8 @@ internal static class VisualObjects
             bool bushLike = !tree && (shapes.Count > 0 ? shapes.All(s => ClassOf(s.Material) == "soft") : bushTpl);
             if (bushesOn && bushLike && mesh is not null && bushTris < bushOpts.MaxTris)
             {
-                var (bd, bdr, bt) = AddBushes(sec["soft"], mesh, m, Ue, objs.Probe.Road, bushOpts, inst["id"]!.GetValue<string>());
+                var (bd, bdr, bt) = AddBushes(sec["soft"], mesh, m, Ue, objs.Probe.Road, bushOpts, inst["id"]!.GetValue<string>(),
+                    TreeInstancer.CoverEnabled && TreeInstancer.Plants.Count < TreeInstancer.CoverBudget);
                 bushesDrawn += bd; bushesDropped += bdr; bushTris += bt; counts["soft"] += bd;
                 notSolid++; perTemplate.TryAdd(tname, $"bush / ground cover: {bd} blobs"); continue;
             }
@@ -573,7 +574,7 @@ internal static class VisualObjects
 
     /// Up to `PerInstance` blobs spread inside the instance's DR2 render bounds (ground cover patches are 9-17 m wide but
     /// low). Each blob's radius is limited by its plan clearance from the road minus the margin, so nothing reaches the corridor.
-    static (int drawn, int dropped, int tris) AddBushes(ProcMesh.Section s, Mesh mesh, Matrix4x4 m, Func<Vector3, V3> ue, RoadCorridor road, BushOpts o, string seed)
+    static (int drawn, int dropped, int tris) AddBushes(ProcMesh.Section s, Mesh mesh, Matrix4x4 m, Func<Vector3, V3> ue, RoadCorridor road, BushOpts o, string seed, bool record = false)
     {
         var (wmn, wmx) = WorldBox(mesh.Min, mesh.Max, m, ue);
         double px = wmx.X - wmn.X, py = wmx.Y - wmn.Y, ph = wmx.Z - wmn.Z;
@@ -590,6 +591,13 @@ internal static class VisualObjects
             double r = r0 * (0.75 + 0.35 * rnd.NextDouble());
             r = Math.Min(r, road.QueryNear(x, y).clearance - o.Margin);
             if (r < o.MinR) { dropped++; continue; }
+            if (record)
+            {
+                // ACR ground cover mesh instead of a dome (TreeInstancer [trees] cover_*): only where it is placed
+                TreeInstancer.Plants.Add(new TreeInstancer.Plant(x, y, wmn.Z, rnd.NextDouble() * 2 * Math.PI, r));
+                drawn++;
+                continue;
+            }
             AddBush(s, x, y, wmn.Z - 5, r, h * (0.8 + 0.4 * rnd.NextDouble()), o.Sides, rnd);
             drawn++; tris += Math.Max(3, o.Sides) * 3;
         }

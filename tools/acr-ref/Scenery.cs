@@ -223,7 +223,8 @@ internal static class Scenery
 
         // persistent forest components reused for the DR2 trees (TreeInstancer): they and their actors stay visible
         var treeTargets = TreeInstancer.Enabled && TreeInstancer.Trees.Count > 0 ? TreeInstancer.Find(pkg, cfg) : [];
-        var reuse = treeTargets.Select(t => t.Export).ToHashSet();
+        var coverTargets = TreeInstancer.CoverEnabled ? TreeInstancer.Find(pkg, cfg, "cover_reuse", treeTargets.Select(t => t.Key).ToHashSet()) : [];
+        var reuse = treeTargets.Concat(coverTargets).Select(t => t.Export).ToHashSet();
 
         // persistent actors
         var mappings = new FileUsmapTypeMappingsProvider(usmap, StringComparer.OrdinalIgnoreCase).MappingsForGame!;
@@ -281,7 +282,7 @@ internal static class Scenery
             report["persistent"]!["actors_bhidden"] = actorFlag;
             report["persistent"]!["actors_bhidden_skipped"] = new JsonObject(actorFlagSkipped.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value)));
         }
-        if (treeTargets.Count > 0) report["trees"] = TreeInstancer.Apply(pkg, cfg, treeTargets);
+        if (treeTargets.Count > 0 || coverTargets.Count > 0) report["trees"] = TreeInstancer.Apply(pkg, cfg, treeTargets, coverTargets);
         var dest = Path.Combine(outRoot, Persistent + Path.GetExtension(path));
         pkg.SaveTo(dest);
         foreach (var ext in new[] { ".ubulk", ".uptnl" })

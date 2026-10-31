@@ -159,6 +159,18 @@ internal static class HismRewrite
         return d;
     }
 
+    /// Replaces the single occurrence of an object reference (FPackageIndex, int32) in the property block, e.g. the
+    /// StaticMesh import; false when it is not there exactly once.
+    public static bool SwapReference(byte[] d, Layout L, int oldRef, int newRef)
+    {
+        int hits = 0, at = -1;
+        for (int p = 0; p + 4 <= L.Flags; p++)
+            if (I32(d, p) == oldRef) { hits++; at = p; }
+        if (hits != 1) return false;
+        BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(at), newRef);
+        return true;
+    }
+
     /// Morton (Z-order) code of a plan position inside the box, 16 bits per axis.
     public static uint Morton(double x, double y, double x0, double y0, double x1, double y1)
     {
