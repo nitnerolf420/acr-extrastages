@@ -1,0 +1,42 @@
+name: Build dr2-extract
+
+# Manual run (Actions tab -> "Build dr2-extract" -> Run workflow): builds only tools/dr2-extract as the same
+# self-contained single-file win-x64 exe the release contains, and uploads it as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  build:
+    name: dr2-extract.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Bootstrap third_party (pinned clones + patches)
+        shell: pwsh
+        run: ./scripts/bootstrap.ps1
+
+      - name: Publish dr2-extract
+        shell: pwsh
+        run: |
+          dotnet publish tools/dr2-extract/Dr2Extract.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true -p:DebugType=embedded -p:NuGetAudit=false `
+            --nologo -v:minimal -o out
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+          if (-not (Test-Path out/dr2-extract.exe)) { throw 'no dr2-extract.exe produced' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dr2-extract
+          path: out/dr2-extract.exe
+          if-no-files-found: error
