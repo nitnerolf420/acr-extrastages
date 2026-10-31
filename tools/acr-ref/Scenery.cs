@@ -221,6 +221,10 @@ internal static class Scenery
             ["moves"] = new JsonObject(moves.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value))),
         };
 
+        // persistent forest components reused for the DR2 trees (TreeInstancer): they and their actors stay visible
+        var treeTargets = TreeInstancer.Enabled && TreeInstancer.Trees.Count > 0 ? TreeInstancer.Find(pkg, cfg) : [];
+        var reuse = treeTargets.Select(t => t.Export).ToHashSet();
+
         // persistent actors
         var mappings = new FileUsmapTypeMappingsProvider(usmap, StringComparer.OrdinalIgnoreCase).MappingsForGame!;
         var byRule = new SortedDictionary<string, int>();
@@ -234,7 +238,7 @@ internal static class Scenery
             actorsHidden++;
             actorNames.Add(pkg.ExportName(actor));
             byRule[rule] = byRule.GetValueOrDefault(rule) + 1;
-            if (!actorHidden) { }
+            if (!actorHidden || comps.Any(reuse.Contains)) { }
             else if (WithActorHidden(mappings, pkg.ExportClass(actor), pkg.GetExportData(actor)) is { } hiddenData)
             {
                 pkg.SetExportData(actor, hiddenData);
@@ -243,6 +247,7 @@ internal static class Scenery
             else actorFlagSkipped[pkg.ExportClass(actor)] = actorFlagSkipped.GetValueOrDefault(pkg.ExportClass(actor)) + 1;
             foreach (var c in comps)
             {
+                if (reuse.Contains(c)) continue;
                 var ccls = pkg.ExportClass(c);
                 if (VisibleSlot(mappings, ccls) is not { } slot) continue;   // not a scene component (or not in the mappings)
                 var d = pkg.GetExportData(c);
@@ -276,6 +281,7 @@ internal static class Scenery
             report["persistent"]!["actors_bhidden"] = actorFlag;
             report["persistent"]!["actors_bhidden_skipped"] = new JsonObject(actorFlagSkipped.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)kv.Value)));
         }
+        if (treeTargets.Count > 0) report["trees"] = TreeInstancer.Apply(pkg, cfg, treeTargets);
         var dest = Path.Combine(outRoot, Persistent + Path.GetExtension(path));
         pkg.SaveTo(dest);
         foreach (var ext in new[] { ".ubulk", ".uptnl" })
@@ -457,12 +463,14 @@ internal static class Scenery
         var mappings = new FileUsmapTypeMappingsProvider(usmap, StringComparer.OrdinalIgnoreCase).MappingsForGame!;
         int actors = 0, comps = 0, hidden = 0;
         var found = new HashSet<string>();
+        var reusedKeys = (report?["trees"]?["reused"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToHashSet() ?? [];
         foreach (var (a, _, cs) in HiddenActors(pkg, plan, expected))
         {
             actors++;
             found.Add(pkg.ExportName(a));
             foreach (var c in cs)
             {
+                if (reusedKeys.Contains(TreeInstancer.KeyOf(pkg, c))) continue;   // reused for the DR2 trees: stays visible
                 if (VisibleSlot(mappings, pkg.ExportClass(c)) is not { } slot) continue;
                 comps++;
                 int p = 0;
@@ -475,8 +483,9 @@ internal static class Scenery
             // the HLOD runtime switches its actors' components with SceneComponent::SetVisibility, overriding bVisible;
             // AActor.bHidden is not touched by it and hides every component in game
             int set = 0, hlods = 0, hlodSet = 0;
-            foreach (var (a, _, _) in HiddenActors(pkg, plan, expected))
+            foreach (var (a, _, acomps) in HiddenActors(pkg, plan, expected))
             {
+                if (acomps.Any(c => reusedKeys.Contains(TreeInstancer.KeyOf(pkg, c)))) continue;   // actor stays visible (reused forest)
                 var cls = pkg.ExportClass(a);
                 bool on = SlotOf(mappings, cls, "Actor", "bHidden") is { } slot && HiddenValue(pkg.GetExportData(a), slot, mappings, cls);
                 if (on) set++;

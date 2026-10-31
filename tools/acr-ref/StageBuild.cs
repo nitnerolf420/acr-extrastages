@@ -176,6 +176,8 @@ internal static class StageBuild
 
         int hostColliders = BuildBaked(ir, pl, legacy, outRoot, report, objectsCfg is null ? null : Toml.Load(objectsCfg), road, registry, out var objectShapes);
         report["host_collider_count"] = hostColliders;
+        TreeInstancer.Reset();
+        if (o.Named.GetValueOrDefault("scenery") is { } treesSceneryCfg) TreeInstancer.Prepare(legacy, Toml.Load(treesSceneryCfg));
         var cellInfo = BuildCell(o, ir, pl, legacy, outRoot, report, respawnMode, road, objectShapes, packageRoot);
         BuildTables(o, ir, legacy, outRoot, keepPacenotes, additive, report, pacenoteMap is null ? null : Toml.Load(pacenoteMap), cellInfo);
         if (o.Named.GetValueOrDefault("scenery") is { } sceneryCfg)

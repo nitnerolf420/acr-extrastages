@@ -155,6 +155,17 @@ internal static class VisualObjects
                 if (canopy && canopyMode is "clip" or "apex") canopySpans.Add((Math.Max(hi.X - lo.X, hi.Y - lo.Y), $"{s.Template} {s.Instance}"));
                 if (!canopy && s.MeshPhysics is { Count: > 1 }) flareSpans.Add((Math.Max(Math.Max(hi.X - lo.X, hi.Y - lo.Y), hi.Z - lo.Z), $"{s.Template} {s.Instance}"));
             }
+            if (tree && shapes.Count > 0 && TreeInstancer.Enabled && mesh is not null && TreeInstancer.Trees.Count < TreeInstancer.Budget)
+            {
+                // drawn by ACR's own tree mesh instead (TreeInstancer): no prism or crown proxy; the colliders stay in BakedData
+                treeInstances++;
+                var at = Ue(origin); var ahead = Ue(Vector3.Transform(Vector3.UnitX, m));
+                var (tmn, tmx) = WorldBox(mesh.Min, mesh.Max, m, Ue);
+                TreeInstancer.Trees.Add(new TreeInstancer.Tree(at.X, at.Y, at.Z, Math.Atan2(ahead.Y - at.Y, ahead.X - at.X), tmx.Z - tmn.Z));
+                counts["trunks"]++;
+                perTemplate.TryAdd(tname, "tree: ACR tree mesh (instanced)");
+                continue;
+            }
             if (tree && shapes.Count > 0)
             {
                 treeInstances++;
