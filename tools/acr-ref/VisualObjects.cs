@@ -43,6 +43,8 @@ internal static class VisualObjects
         int maxMeshTris = (int)cfg.Num("objects", "max_mesh_triangles");
         int sides = (int)cfg.Num("objects", "prism_sides");
         int crownTiers = (int)NumOr(cfg, "objects", "crown_tiers", 1), crownSides = (int)NumOr(cfg, "objects", "crown_sides", 4);
+        var bushOpts = ReadBushOpts(cfg);
+        int bushesDrawn = 0, bushesDropped = 0, bushTris = 0;
         var sec = Classes.ToDictionary(c => c, _ => new ProcMesh.Section());
         var counts = Classes.ToDictionary(c => c, _ => 0);
 
@@ -74,6 +76,7 @@ internal static class VisualObjects
         int alignChecked = 0, misaligned = 0, crownsDrawn = 0, crownsDropped = 0;
         var perTemplate = new SortedDictionary<string, string>();
         bool crowns = vegetation switch { "none" => false, "crowns" => true, _ => throw new ArgumentException($"vegetation must be none or crowns, not {vegetation}") };
+        bool bushesOn = crowns && bushOpts.Enabled;   // ground cover and bushes come with the crowns
         double overhang = cfg.Num("objects", "overhang_height_m") * 100;
         double meshPenLimit = objs.Probe.MaxPen + cfg.Num("objects", "road_overlap_tolerance_m") * 100;
         double maxOverBounds = cfg.Num("objects", "max_extent_over_bounds");
@@ -105,6 +108,18 @@ internal static class VisualObjects
             var shapes = kept.GetValueOrDefault(inst["id"]!.GetValue<string>()) ?? [];
             bool tree = shapes.Any(s => s.Material == "PM_WallWoodTreeTrunks") || templates[tname]?["bodies"]?.AsArray()
                 .SelectMany(b => b!["shapes"]!.AsArray()).Any(s => treeClasses.Contains(s!["shape_class"]?.GetValue<string>() ?? "")) == true;
+
+            // bushes / ground cover (vegetation crowns + [objects] bushes = 1): a few small low-poly blobs inside the DR2 render bounds,
+            // each kept clear of the road corridor in plan, capped by bush_max_triangles. Not-drawn otherwise, as before (v1.4).
+            bool bushTpl = bushesOn && templates[tname]?["bodies"]?.AsArray()
+                .SelectMany(b => b!["shapes"]!.AsArray()).Any(s => bushOpts.Classes.Contains(s!["shape_class"]?.GetValue<string>() ?? "")) == true;
+            bool bushLike = !tree && (shapes.Count > 0 ? shapes.All(s => ClassOf(s.Material) == "soft") : bushTpl);
+            if (bushesOn && bushLike && mesh is not null && bushTris < bushOpts.MaxTris)
+            {
+                var (bd, bdr, bt) = AddBushes(sec["soft"], mesh, m, Ue, objs.Probe.Road, bushOpts, inst["id"]!.GetValue<string>());
+                bushesDrawn += bd; bushesDropped += bdr; bushTris += bt; counts["soft"] += bd;
+                notSolid++; perTemplate.TryAdd(tname, $"bush / ground cover: {bd} blobs"); continue;
+            }
 
             // solid bush colliders (PM_WallBush): soft vegetation is not drawn (v1.4); the colliders stay in BakedData. Drawn they were up to 3M triangles of bushes.
             if (!tree && shapes.Count > 0 && shapes.All(s => ClassOf(s.Material) == "soft"))
@@ -230,6 +245,7 @@ internal static class VisualObjects
             ["render_mesh_instances"] = meshInstances, ["shape_proxy_instances"] = proxyInstances,
             ["not_solid_not_drawn"] = notSolid,
             ["crowns_drawn"] = crownsDrawn, ["crowns_dropped"] = crownsDropped,
+            ["bushes_drawn"] = bushesDrawn, ["bushes_dropped"] = bushesDropped, ["bush_triangles"] = bushTris,
             ["render_mesh_road_fallback"] = new JsonObject(fallbacks.Select(kv => KeyValuePair.Create(kv.Key,
                 (JsonNode?)$"{kv.Value.n} (render mesh {kv.Value.depth / 100:0.00} m into the corridor -> shapes)"))),
             ["without_render_mesh_or_shapes"] = noMesh,
@@ -526,6 +542,71 @@ internal static class VisualObjects
         for (int t = 0; t + 2 < mesh.Idx.Length; t += 3)
             best = Math.Max(best, probe.TriangleDepth(w[mesh.Idx[t]], w[mesh.Idx[t + 1]], w[mesh.Idx[t + 2]], 50, probe.HMin, overhang));
         return best;
+    }
+
+    /// Bush / ground cover settings ([objects] bush_* in config/visuals.toml; all optional, `bushes = 0` by default).
+    sealed record BushOpts(bool Enabled, HashSet<string> Classes, double MinR, double MaxR, double MinH, double MaxH, double Margin, int PerInstance, int Sides, int MaxTris);
+
+    static BushOpts ReadBushOpts(Toml cfg)
+    {
+        var classes = cfg["objects"].TryGetValue("bush_shape_classes", out var v) && v is object[] a
+            ? a.OfType<string>().ToHashSet() : new HashSet<string> { "sSoftVegetation" };
+        return new BushOpts(NumOr(cfg, "objects", "bushes", 0) != 0, classes,
+            NumOr(cfg, "objects", "bush_min_radius_m", 0.4) * 100, NumOr(cfg, "objects", "bush_max_radius_m", 1.8) * 100,
+            NumOr(cfg, "objects", "bush_min_height_m", 0.4) * 100, NumOr(cfg, "objects", "bush_max_height_m", 1.4) * 100,
+            NumOr(cfg, "objects", "bush_road_margin_m", 0.6) * 100, (int)NumOr(cfg, "objects", "bush_per_instance", 4),
+            (int)NumOr(cfg, "objects", "bush_sides", 6), (int)NumOr(cfg, "objects", "bush_max_triangles", 300000));
+    }
+
+    static int StableHash(string s) { unchecked { int h = 17; foreach (var ch in s) h = h * 31 + ch; return h; } }
+
+    /// Up to `PerInstance` blobs spread inside the instance's DR2 render bounds (ground cover patches are 9-17 m wide but
+    /// low). Each blob's radius is limited by its plan clearance from the road minus the margin, so nothing reaches the corridor.
+    static (int drawn, int dropped, int tris) AddBushes(ProcMesh.Section s, Mesh mesh, Matrix4x4 m, Func<Vector3, V3> ue, RoadCorridor road, BushOpts o, string seed)
+    {
+        var (wmn, wmx) = WorldBox(mesh.Min, mesh.Max, m, ue);
+        double px = wmx.X - wmn.X, py = wmx.Y - wmn.Y, ph = wmx.Z - wmn.Z;
+        if (px <= 0 || py <= 0) return (0, 1, 0);
+        var rnd = new Random(StableHash(seed));
+        double r0 = Math.Clamp(Math.Min(px, py) * 0.35, o.MinR, o.MaxR);
+        double h = Math.Clamp(ph * 0.8, o.MinH, o.MaxH);
+        int n = Math.Clamp((int)Math.Round(px / (2 * r0) * py / (2 * r0) * 0.5), 1, Math.Max(1, o.PerInstance));
+        int drawn = 0, dropped = 0, tris = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double x = n == 1 ? (wmn.X + wmx.X) / 2 : wmn.X + px * (0.15 + 0.7 * rnd.NextDouble());
+            double y = n == 1 ? (wmn.Y + wmx.Y) / 2 : wmn.Y + py * (0.15 + 0.7 * rnd.NextDouble());
+            double r = r0 * (0.75 + 0.35 * rnd.NextDouble());
+            r = Math.Min(r, road.QueryNear(x, y).clearance - o.Margin);
+            if (r < o.MinR) { dropped++; continue; }
+            AddBush(s, x, y, wmn.Z - 5, r, h * (0.8 + 0.4 * rnd.NextDouble()), o.Sides, rnd);
+            drawn++; tris += Math.Max(3, o.Sides) * 3;
+        }
+        return (drawn, dropped, tris);
+    }
+
+    /// Low convex dome: a ground ring, a half-step rotated ring at 60 % of the height, an apex; 3 triangles per side.
+    static void AddBush(ProcMesh.Section s, double cx, double cy, double zb, double r, double h, int sides, Random rnd)
+    {
+        sides = Math.Max(3, sides);
+        var ring0 = new V3[sides]; var ring1 = new V3[sides];
+        double rot = rnd.NextDouble() * 2 * Math.PI / sides;
+        for (int i = 0; i < sides; i++)
+        {
+            double a = 2 * Math.PI * i / sides + rot, a1 = a + Math.PI / sides;
+            double j0 = 0.8 + 0.3 * rnd.NextDouble(), j1 = 0.8 + 0.3 * rnd.NextDouble();
+            ring0[i] = new V3(cx + r * j0 * Math.Cos(a), cy + r * j0 * Math.Sin(a), zb);
+            ring1[i] = new V3(cx + 0.75 * r * j1 * Math.Cos(a1), cy + 0.75 * r * j1 * Math.Sin(a1), zb + 0.6 * h);
+        }
+        var apex = new V3(cx, cy, zb + h);
+        var inside = new V3(cx, cy, zb + 0.35 * h);
+        for (int i = 0; i < sides; i++)
+        {
+            int i2 = (i + 1) % sides;
+            Tri(s, ring0[i], ring0[i2], ring1[i], inside);
+            Tri(s, ring0[i2], ring1[i2], ring1[i], inside);
+            Tri(s, ring1[i], ring1[i2], apex, inside);
+        }
     }
 
     static double NumOr(Toml cfg, string section, string key, double fallback) =>
