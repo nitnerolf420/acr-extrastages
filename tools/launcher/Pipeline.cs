@@ -413,7 +413,7 @@ internal sealed class Pipeline
             "--respawn", "relay",
             "--scenery", cfg("scenery.toml"), "--scenery-actor-hidden", "1",
             "--visuals", cfg("visuals.toml"), "--visuals-host", "start", "--visuals-retarget", "1",
-            "--visuals-vegetation", "none", "--visuals-vista", "1", "--visuals-textured", "1",
+            "--visuals-vegetation", "crowns", "--visuals-vista", "1", "--visuals-textured", "1",
             "--visuals-dr2", "1", "--visuals-canopies", "apex", "--visuals-terrain-uv", "box",
             "--visuals-ground", "render", "--visuals-ground-lod", "1",
             "--sky", cfg("sky.toml"), "--sky-section", s.Sky,
