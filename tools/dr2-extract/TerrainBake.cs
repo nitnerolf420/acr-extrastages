@@ -45,7 +45,7 @@ internal sealed record GroundBakeOptions(
 /// square tiles in IR coordinates (UV = (x - min_x) / size, (z - min_z) / size; row 0 = min_z). Writes BC1 DDS with
 /// mips, PNG previews, road masks and manifest.json to <c>render/ground_bake/</c>. Decode notes: docs/dr2-formats.md.
 /// </summary>
-internal static class TerrainBake
+internal static partial class TerrainBake
 {
     private const float BaseUvScale = 0.125f;
 
@@ -276,7 +276,10 @@ internal static class TerrainBake
                           (skipped.Count == 0 ? "none" : string.Join(", ", skipped.Select(s => $"{s.Key} x{s.Value}"))));
         if (tris.Count == 0)
         {
-            throw new InvalidDataException("ground bake: no terrain_array triangles in the corridor");
+            // WSM-shader stages (Finland, Sweden, ...): no terrain_array.fx. Bake DR2's own low-LOD colour instead
+            // (LowLodBake.cs); if that is not possible either this throws the same exception as before and the
+            // caller soft-skips the bake.
+            return LowLodFallback(pssg, textures, corridor, st, pssgPath, dir, o, timer);
         }
 
         // Textures: every terrain_array shader of this location shares one diffuse array (checked here).
