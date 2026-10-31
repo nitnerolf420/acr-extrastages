@@ -244,6 +244,34 @@ internal sealed class Dr2Materials
             var ranked = (kind == "road" && road.Count > 0 ? road : terr).OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Where(Usable).ToList();
             if (ranked.Count == 0) ranked = road.Concat(terr).OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Where(Usable).ToList();
             pick = ranked.FirstOrDefault(); how = "most used TDiffuseSpecMap1 of the terrain materials";
+            if (kind == "road")
+            {
+                // DR2's road shaders paint the road from tall "feature" strip textures (verge | gravel | verge across U, pixel
+                // size 1:2). The generic set tiles ranked above are not strips and look streaked when stretched edge to edge
+                // over the road strip UVs, so the strip texture used on most road-shader triangles wins when there is one.
+                var strips = new Dictionary<string, long>();
+                var terrainJson = Path.Combine(_irDir, "render", "terrain.materials.json");
+                if (File.Exists(terrainJson))
+                    foreach (var mat in JsonNode.Parse(File.ReadAllText(terrainJson))!.AsArray())
+                    {
+                        if (!(mat!["shader_group"]?.GetValue<string>() ?? "").Contains("road", StringComparison.OrdinalIgnoreCase)) continue;
+                        long tris = (long?)mat["triangles"] ?? 1;
+                        var t1 = mat["textures"]!.AsArray().FirstOrDefault(x => x!["parameter"]!.GetValue<string>() == "TDiffuseSpecMap1");
+                        if (t1 is null) continue;
+                        var r1 = t1["texture"]!.GetValue<string>();
+                        var n1 = Path.GetFileNameWithoutExtension(r1[(r1.IndexOf('#') + 1)..]);
+                        strips[n1] = strips.GetValueOrDefault(n1) + tris;
+                    }
+                foreach (var kv in strips.OrderByDescending(kv => kv.Value))
+                {
+                    if (!Usable(kv.Key)) continue;
+                    Dds dds;
+                    try { dds = new Dds(Path.Combine(_texDir, kv.Key + ".dds")); } catch (NotSupportedException) { continue; }
+                    if (dds.Height != 2 * dds.Width) continue;
+                    pick = kv.Key; how = $"road strip texture (1:2) used on most road-shader triangles ({kv.Value})";
+                    break;
+                }
+            }
         }
         pick ??= names.Where(n => n.EndsWith("_d") && Usable(n)).Order().FirstOrDefault(); how = pick is null ? "none" : how;
         if (pick is null) throw new FileNotFoundException($"{configured}: not in {_texDir} and no stand-in {kind} texture found there");
